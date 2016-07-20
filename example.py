@@ -30,6 +30,8 @@ from requests.adapters import ConnectionError
 from requests.models import InvalidURL
 from transform import *
 
+from twilio.rest import TwilioRestClient
+
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
 API_URL = 'https://pgorelease.nianticlabs.com/plfe/rpc'
@@ -46,6 +48,16 @@ ANDROID_ID = credentials.get('android_id', None)
 SERVICE = credentials.get('service', None)
 CLIENT_SIG = credentials.get('client_sig', None)
 GOOGLEMAPS_KEY = credentials.get('gmaps_key', None)
+
+TWILIO_ACCOUNT_SID = credentials.get('twilio_account_sid', None)
+TWILIO_AUTH_TOKEN_SECRET = credentials.get('twilio_auth_token_secret', None)
+TWILIO_FROM_NUMBER = credentials.get('twilio_from_number', None)
+NOTIFY_NUMBER = credentials.get('notify_number', None)
+
+twilio_client = None
+
+if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN_SECRET:
+    twilio_client = TwilioRestClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN_SECRET)
 
 SESSION = requests.session()
 SESSION.headers.update({'User-Agent': 'Niantic App'})
@@ -499,6 +511,10 @@ def get_args():
     	default=False)
     parser.add_argument(
         '-d', '--debug', help='Debug Mode', action='store_true')
+    parser.add_argument(
+            "-n",
+            "--notify",
+            help="Comma-separated list of Pokemon names to notify when found")
     parser.set_defaults(DEBUG=True)
     return parser.parse_args()
 
@@ -586,11 +602,15 @@ def main():
 
     ignore = []
     only = []
+    notify = []
     if args.ignore:
         ignore = [i.lower().strip() for i in args.ignore.split(',')]
     elif args.only:
         only = [i.lower().strip() for i in args.only.split(',')]
 
+    if args.notify:
+        notify = [i.lower().strip() for i in args.notify.split(',')]
+        
     pos = 1
     x = 0
     y = 0
@@ -610,7 +630,7 @@ def main():
         (x, y) = (x + dx, y + dy)
 
         process_step(args, api_endpoint, access_token, profile_response,
-                     pokemonsJSON, ignore, only)
+                     pokemonsJSON, ignore, only, notify)
 
         print('Completed: ' + str(
             ((step+1) + pos * .25 - .25) / (steplimit2) * 100) + '%')
@@ -629,7 +649,7 @@ def main():
 
 
 def process_step(args, api_endpoint, access_token, profile_response,
-                 pokemonsJSON, ignore, only):
+                 pokemonsJSON, ignore, only, notify):
     print('[+] Searching for Pokemon at location {} {}'.format(FLOAT_LAT, FLOAT_LONG))
     origin = LatLng.from_degrees(FLOAT_LAT, FLOAT_LONG)
     step_lat = FLOAT_LAT
@@ -690,7 +710,7 @@ transform_from_wgs_to_gcj(Location(Fort.Latitude, Fort.Longitude))
         elif args.only:
             if pokename.lower() not in only and pokeid not in only:
                 continue
-
+        
         disappear_timestamp = time.time() + poke.TimeTillHiddenMs \
             / 1000
 
@@ -699,6 +719,10 @@ transform_from_wgs_to_gcj(Location(Fort.Latitude, Fort.Longitude))
                 transform_from_wgs_to_gcj(Location(poke.Latitude,
                     poke.Longitude))
 
+        if args.notify:
+                if pokename.lower() in notify:
+                        send_sms_for_pokemon(pokename)
+            
         pokemons[poke.SpawnPointId] = {
             "lat": poke.Latitude,
             "lng": poke.Longitude,
@@ -707,6 +731,12 @@ transform_from_wgs_to_gcj(Location(Fort.Latitude, Fort.Longitude))
             "name": pokename
         }
 
+def send_sms_for_pokemon(pokename):
+    print "Notify about pokemon: " + pokename
+    notify_message = pokename + " is in your radius!"
+    message = twilio_client.messages.create(to=NOTIFY_NUMBER, from_=TWILIO_FROM_NUMBER, body=notify_message)
+
+        
 def clear_stale_pokemons():
     current_time = time.time()
 
